@@ -1,1 +1,1 @@
-worker: wartracker.py
+worker: python wartracker.py
