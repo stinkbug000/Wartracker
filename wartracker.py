@@ -1,78 +1,109 @@
 import discord
 from discord.ext import commands
+import json
+import os
 
-# Initialize bot with a prefix for commands
-bot = commands.Bot(command_prefix='!')
+# Your server IDs
+ALLOWED_GUILD_IDS = [1359628998212194596, 1306087142174363690]  # replace with your actual server IDs
 
-# Define allowed channel IDs (replace these with your actual channel IDs)
-ALLOWED_CHANNELS = [123456789012345678, 987654321098765432]  # Replace with your channel IDs
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-# This will store attack information
-attack_data = {}
+DATA_FILE = 'data.json'
 
-# Event when the bot has connected to Discord
+# Load or initialize data
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, 'r') as f:
+        data = json.load(f)
+else:
+    data = {}
+
+def save_data():
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f, indent=4)
+
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
 
-# Function to check if the bot is in an allowed channel
-async def is_allowed_channel(ctx):
-    if ctx.channel.id not in ALLOWED_CHANNELS:
-        await ctx.send(f"Sorry, I can't respond in this channel.")
-        return False
-    return True
+def is_allowed(ctx):
+    return ctx.guild and ctx.guild.id in ALLOWED_GUILD_IDS
 
-# Command to add a single attack
 @bot.command()
-async def attack(ctx, player: str, war: str, attacks: int):
-    if not await is_allowed_channel(ctx):
+async def add(ctx, player: str, stars: int, three_star: bool):
+    if not is_allowed(ctx):
         return
+    player = player.lower()
+    if player not in data:
+        data[player] = {"stars": 0, "three_stars": 0, "attacks": 0, "missed": 0}
+    data[player]["stars"] += stars
+    data[player]["three_stars"] += int(three_star)
+    data[player]["attacks"] += 1
+    save_data()
+    await ctx.send(f"{player} added: {stars} star(s), 3-star: {three_star}")
 
-    # Store or update the attack count for a player in a specific war
-    if player not in attack_data:
-        attack_data[player] = {}
-    if war not in attack_data[player]:
-        attack_data[player][war] = {'attacks': 0, 'misses': 0}
-
-    attack_data[player][war]['attacks'] += attacks
-    await ctx.send(f"Player {player} has {attack_data[player][war]['attacks']} attacks in {war}.")
-
-# Command to add multiple batch attacks (batch command)
 @bot.command()
-async def batch(ctx, *args):
-    if not await is_allowed_channel(ctx):
+async def remove(ctx, player: str, stars: int, three_star: bool):
+    if not is_allowed(ctx):
         return
-
-    # Expect input like "player_name attacks war_name, ..."
-    for attack_info in args:
-        player, attacks, war = attack_info.split()
-        attacks = int(attacks)  # Convert to integer
-        await attack(ctx, player, war, attacks)
-
-# Command to remove a member's attacks in a specific war
-@bot.command()
-async def remove(ctx, player: str, war: str):
-    if not await is_allowed_channel(ctx):
-        return
-
-    if player in attack_data and war in attack_data[player]:
-        del attack_data[player][war]
-        await ctx.send(f"Removed all attacks for {player} in {war}.")
+    player = player.lower()
+    if player in data:
+        data[player]["stars"] -= stars
+        data[player]["three_stars"] -= int(three_star)
+        data[player]["attacks"] -= 1
+        save_data()
+        await ctx.send(f"{player} removed: {stars} star(s), 3-star: {three_star}")
     else:
-        await ctx.send(f"No data found for {player} in {war}.")
+        await ctx.send(f"{player} not found.")
 
-# Command to report the attack summary (total attacks and misses)
+@bot.command()
+async def missed(ctx, player: str):
+    if not is_allowed(ctx):
+        return
+    player = player.lower()
+    if player not in data:
+        data[player] = {"stars": 0, "three_stars": 0, "attacks": 0, "missed": 0}
+    data[player]["missed"] += 1
+    save_data()
+    await ctx.send(f"{player} marked as missed attack.")
+
+@bot.command()
+async def batch(ctx, *, message: str):
+    if not is_allowed(ctx):
+        return
+    lines = message.strip().split('\n')
+    for line in lines:
+        parts = line.strip().split()
+        if len(parts) == 3:
+            player, stars, three_star = parts
+            player = player.lower()
+            stars = int(stars)
+            three_star = three_star.lower() == 'true'
+            if player not in data:
+                data[player] = {"stars": 0, "three_stars": 0, "attacks": 0, "missed": 0}
+            data[player]["stars"] += stars
+            data[player]["three_stars"] += int(three_star)
+            data[player]["attacks"] += 1
+    save_data()
+    await ctx.send("Batch update complete.")
+
 @bot.command()
 async def summary(ctx):
-    if not await is_allowed_channel(ctx):
+    if not is_allowed(ctx):
         return
+    if not data:
+        await ctx.send("No data available.")
+        return
+    lines = []
+    for player, stats in data.items():
+        lines.append(
+            f"**{player.title()}** - Stars: {stats['stars']}, "
+            f"3-stars: {stats['three_stars']}, "
+            f"Attacks: {stats['attacks']}, "
+            f"Missed: {stats['missed']}"
+        )
+    await ctx.send("\n".join(lines))
 
-    summary_msg = "Attack Summary:\n"
-    for player, wars in attack_data.items():
-        total_attacks = sum(war_data['attacks'] for war_data in wars.values())
-        total_misses = sum(war_data['misses'] for war_data in wars.values())
-        summary_msg += f"{player}: {total_attacks} attacks, {total_misses} misses\n"
-    await ctx.send(summary_msg)
-
-# Run the bot using the token from environment variables
-bot.run('MTM1OTU2MzAwMzQxODI0NzIyOQ.GjGf1E.p1vTdmsOpomgw-Uqj8S5LVaLtFglFhEDL3VE5I')
+# Start the bot
+bot.run(os.getenv("MTM1OTU2MzAwMzQxODI0NzIyOQ.GjGf1E.p1vTdmsOpomgw-Uqj8S5LVaLtFglFhEDL3VE5I"))
